@@ -5,21 +5,21 @@
 
 from dataclasses import MISSING
 
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
-from omni.isaac.lab.envs import ManagerBasedRLEnvCfg
-from omni.isaac.lab.managers import CurriculumTermCfg as CurrTerm
-from omni.isaac.lab.managers import EventTermCfg as EventTerm
-from omni.isaac.lab.managers import ObservationGroupCfg as ObsGroup
-from omni.isaac.lab.managers import ObservationTermCfg as ObsTerm
-from omni.isaac.lab.managers import RewardTermCfg as RewTerm
-from omni.isaac.lab.managers import SceneEntityCfg
-from omni.isaac.lab.managers import TerminationTermCfg as DoneTerm
-from omni.isaac.lab.scene import InteractiveSceneCfg
-from omni.isaac.lab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
-from omni.isaac.lab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
-from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
+import isaaclab.sim as sim_utils
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
+from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import ObservationGroupCfg as ObsGroup
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
+from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
+from isaaclab.utils import configclass
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from . import mdp
 
@@ -46,8 +46,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     table = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Table",
         init_state=AssetBaseCfg.InitialStateCfg(pos=[0.5, 0, 0], rot=[0.707, 0, 0, 0.707]),
-        spawn=UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/ThorlabsTable/table_instanceable.usd",
-                         scale=(0.8, 0.8, 0.8)),
+        spawn=UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd"),
     )
 
     # plane
@@ -79,7 +78,12 @@ class CommandsCfg:
         resampling_time_range=(5.0, 5.0),
         debug_vis=True,
         ranges=mdp.UniformPoseCommandCfg.Ranges(
-            pos_x=(0.6, 0.7), pos_y=(0.1, 0.3), pos_z=(1.15, 1.2), roll=(0.0, 0.0), pitch=(0.0, 0.0), yaw=(0.0, 0.0)
+            pos_x=(0.45, 0.60),
+            pos_y=(-0.15, 0.15),
+            pos_z=(0.15, 0.30),
+            roll=(0.0, 0.0),
+            pitch=(0.0, 0.0),
+            yaw=(0.0, 0.0),
         ),
     )
 
@@ -104,7 +108,7 @@ class ObservationsCfg:
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
         object_position = ObsTerm(func=mdp.object_position_in_robot_root_frame)
-        target_object_position = ObsTerm(func=mdp.generated_commands, params={"command_name": "object_pose"})
+        target_object_position = ObsTerm(func=mdp.object_pose_command_position, params={"command_name": "object_pose"})
         actions = ObsTerm(func=mdp.last_action)
 
         def __post_init__(self):
@@ -125,7 +129,8 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (0.1, 0.15), "y": (0.3, 0.4), "z": (0.0, 0.0)},
+            # Keep object reset around the table center (closer to native Franka lift behavior).
+            "pose_range": {"x": (-0.1, 0.1), "y": (-0.2, 0.2), "z": (0.0, 0.0)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("object", body_names="Object"),
         },
@@ -136,34 +141,89 @@ class EventCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
+    # Keep reach reward smaller so policy does not stop at object vicinity.
     reaching_object = RewTerm(func=mdp.object_ee_distance, params={"std": 0.1}, weight=1.0)
 
-    lifting_object = RewTerm(func=mdp.object_is_lifted, params={"minimal_height": 0.04}, weight=15.0)
+    # Proxy grasp reward to bridge reach -> lift.
+    grasp_proxy = RewTerm(
+        func=mdp.gripper_closed_near_object,
+        params={
+            "distance_threshold": 0.035,
+            "closed_joint_pos_threshold": 0.02,
+            "robot_cfg": SceneEntityCfg("robot", joint_names=["panda_finger.*"]),
+        },
+        weight=3.0,
+    )
+
+    # Encourage upward object motion once interacting with the object.
+    lift_velocity = RewTerm(
+        func=mdp.object_upward_velocity_near_ee,
+        params={"distance_threshold": 0.05, "velocity_clip": 0.15},
+        weight=4.0,
+    )
+
+    # Sparse lift event + dense lift progress.
+    lifting_object = RewTerm(
+        func=mdp.object_is_lifted_when_grasped,
+        params={
+            "minimal_height": 0.01,
+            "distance_threshold": 0.04,
+            "closed_joint_pos_threshold": 0.02,
+            "robot_cfg": SceneEntityCfg("robot", joint_names=["panda_finger.*"]),
+        },
+        weight=8.0,
+    )
+
+    lift_height_progress = RewTerm(
+        func=mdp.object_lift_height_when_grasped,
+        params={
+            "minimal_height": 0.01,
+            "target_height": 0.10,
+            "distance_threshold": 0.04,
+            "closed_joint_pos_threshold": 0.02,
+            "robot_cfg": SceneEntityCfg("robot", joint_names=["panda_finger.*"]),
+        },
+        weight=5.0,
+    )
 
     object_goal_tracking = RewTerm(
         func=mdp.object_goal_distance,
-        params={"std": 0.3, "minimal_height": 0.04, "command_name": "object_pose"},
-        weight=16.0,
+        params={"std": 0.2, "minimal_height": 0.01, "command_name": "object_pose"},
+        weight=6.0,
     )
 
     object_goal_tracking_fine_grained = RewTerm(
         func=mdp.object_goal_distance,
-        params={"std": 0.05, "minimal_height": 0.04, "command_name": "object_pose"},
-        weight=5.0,
+        params={"std": 0.05, "minimal_height": 0.01, "command_name": "object_pose"},
+        weight=2.0,
+    )
+
+    object_goal_success = RewTerm(
+        func=mdp.object_goal_success,
+        params={"threshold": 0.05, "minimal_height": 0.01, "command_name": "object_pose"},
+        weight=10.0,
+    )
+
+    # Penalize local optimum: close to object, not lifting, and object barely moving.
+    stagnation_near_object = RewTerm(
+        func=mdp.stagnation_near_object,
+        params={"distance_threshold": 0.05, "speed_threshold": 0.015, "minimal_height": 0.01},
+        weight=-3.0,
     )
 
     # action penalty
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
+    # keep exploration in early training
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-2e-4)
 
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
-        weight=-1e-4,
+        weight=-2e-4,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 
     dropping_penalty = RewTerm(
         func = mdp.is_terminated, 
-        weight = -1.0,
+        weight = -2.0,
     )
 
     # ee_close_rewards = RewTerm(
@@ -186,11 +246,11 @@ class CurriculumCfg:
     """Curriculum terms for the MDP."""
 
     action_rate = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.05, "num_steps": 12000}
+        func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.0015, "num_steps": 40000}
     )
 
     joint_vel = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -0.05, "num_steps": 12000}
+        func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -0.0015, "num_steps": 40000}
     )
 
 
@@ -231,3 +291,4 @@ class LiftEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physx.friction_correlation_distance = 0.00625
         # self.sim.physics_material.static_friction = 0.8
         # self.sim.physics_material.dynamic_friction = 0.8
+
