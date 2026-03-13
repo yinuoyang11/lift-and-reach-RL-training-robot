@@ -15,8 +15,8 @@ class LiftCubeVisionPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     save_interval = 50
     experiment_name = "franka_lift_vision"
 
-    # map image group to actor policy, and use both image+state for critic
-    obs_groups = {"policy": ["policy_rgb"], "critic": ["policy", "policy_rgb"]}
+    # Feed both table and wrist RGB streams to the actor, and use state + both RGB streams for the critic.
+    obs_groups = {"policy": ["table_rgb", "wrist_rgb"], "critic": ["policy", "table_rgb", "wrist_rgb"]}
 
     policy = RslRlPpoActorCriticCfg(
         class_name="ActorCriticVision",

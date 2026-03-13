@@ -26,7 +26,7 @@ from isaaclab_assets.robots.franka import FRANKA_PANDA_CFG  # isort: skip
 @configclass
 class ObservationsCfg(BaseObservationsCfg):
     @configclass
-    class RGBCameraPolicyCfg(ObsGroup):
+    class TableRGBCameraPolicyCfg(ObsGroup):
         image = ObsTerm(
             func=mdp.image,
             params={"sensor_cfg": SceneEntityCfg("table_cam"), "data_type": "rgb", "normalize": False},
@@ -36,7 +36,19 @@ class ObservationsCfg(BaseObservationsCfg):
             self.enable_corruption = False
             self.concatenate_terms = True
 
-    policy_rgb: RGBCameraPolicyCfg = RGBCameraPolicyCfg()
+    @configclass
+    class WristRGBCameraPolicyCfg(ObsGroup):
+        image = ObsTerm(
+            func=mdp.image,
+            params={"sensor_cfg": SceneEntityCfg("wrist_cam"), "data_type": "rgb", "normalize": False},
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    table_rgb: TableRGBCameraPolicyCfg = TableRGBCameraPolicyCfg()
+    wrist_rgb: WristRGBCameraPolicyCfg = WristRGBCameraPolicyCfg()
 
 
 @configclass
@@ -49,6 +61,7 @@ class DualArmCubeLiftEnvCfg(LiftEnvCfg):
 
         # Use Franka arm (single arm)
         self.scene.robot = FRANKA_PANDA_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.scene.robot.spawn.activate_contact_sensors = True
 
         # Match native Franka lift action scaling
         self.actions.body_joint_pos = mdp.JointPositionActionCfg(
@@ -103,19 +116,33 @@ class DualArmCubeLiftEnvCfg(LiftEnvCfg):
         self.scene.table_cam = CameraCfg(
             prim_path="{ENV_REGEX_NS}/table_cam",
             update_period=0.0,
-            height=84,
-            width=84,
+            height=96,
+            width=96,
             data_types=["rgb"],
             spawn=sim_utils.PinholeCameraCfg(
-                focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 2.0)
+                focal_length=14.0, focus_distance=400.0, horizontal_aperture=24.0, clipping_range=(0.05, 3.0)
             ),
             offset=CameraCfg.OffsetCfg(
-                pos=(1.0, 0.0, 0.4), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"
+                pos=(1.20, 0.0, 0.72), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"
+            ),
+        )
+
+        self.scene.wrist_cam = CameraCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/panda_hand/wrist_cam",
+            update_period=0.0,
+            height=96,
+            width=96,
+            data_types=["rgb"],
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=14.0, focus_distance=400.0, horizontal_aperture=24.0, clipping_range=(0.05, 2.0)
+            ),
+            offset=CameraCfg.OffsetCfg(
+                pos=(0.10, 0.0, -0.18), rot=(-0.70614, 0.03701, 0.03701, -0.70614), convention="ros"
             ),
         )
 
         self.num_rerenders_on_reset = 3
-        self.image_obs_list = ["table_cam"]
+        self.image_obs_list = ["table_cam", "wrist_cam"]
 
 
 @configclass

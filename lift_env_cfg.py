@@ -16,6 +16,7 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import ContactSensorCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
 from isaaclab.utils import configclass
@@ -41,6 +42,14 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     ee_frame: FrameTransformerCfg = MISSING
     # target object: will be populated by agent env cfg
     object: RigidObjectCfg = MISSING
+
+    # contact sensor for arm-table collision penalty
+    contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*",
+        update_period=0.0,
+        history_length=3,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Table"],
+    )
 
     # Table
     table = AssetBaseCfg(
@@ -211,13 +220,47 @@ class RewardsCfg:
         weight=-3.0,
     )
 
+    arm_table_collision = RewTerm(
+        func=mdp.undesired_contacts,
+        weight=-0.5,
+        params={
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces",
+                body_names=[
+                    "panda_link1",
+                    "panda_link2",
+                    "panda_link3",
+                    "panda_link4",
+                    "panda_link5",
+                    "panda_link6",
+                    "panda_link7",
+                    "panda_hand",
+                ],
+            ),
+            "threshold": 1.0,
+        },
+    )
+
+    singularity_avoidance = RewTerm(
+        func=mdp.singularity_penalty,
+        weight=-0.2,
+        params={
+            "min_singular_value_threshold": 0.05,
+            "robot_cfg": SceneEntityCfg(
+                "robot",
+                joint_names=["panda_joint.*"],
+                body_names=["panda_hand"],
+            ),
+        },
+    )
+
     # action penalty
     # keep exploration in early training
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-2e-4)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
 
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
-        weight=-2e-4,
+        weight=-1e-4,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 
@@ -246,11 +289,11 @@ class CurriculumCfg:
     """Curriculum terms for the MDP."""
 
     action_rate = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.0015, "num_steps": 40000}
+        func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.001, "num_steps": 60000}
     )
 
     joint_vel = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -0.0015, "num_steps": 40000}
+        func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -0.001, "num_steps": 60000}
     )
 
 
@@ -291,4 +334,7 @@ class LiftEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physx.friction_correlation_distance = 0.00625
         # self.sim.physics_material.static_friction = 0.8
         # self.sim.physics_material.dynamic_friction = 0.8
+
+        if self.scene.contact_forces is not None:
+            self.scene.contact_forces.update_period = self.sim.dt
 

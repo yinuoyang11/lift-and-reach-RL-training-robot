@@ -214,6 +214,32 @@ def object_upward_velocity_near_ee(
     return near_object * upward_speed
 
 
+def singularity_penalty(
+    env: ManagerBasedRLEnv,
+    min_singular_value_threshold: float,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=["panda_joint.*"], body_names=["panda_hand"]),
+) -> torch.Tensor:
+    """Continuous penalty for near-singular Jacobian configurations using the minimum singular value."""
+    robot: Articulation = env.scene[robot_cfg.name]
+
+    if len(robot_cfg.body_ids) != 1:
+        raise ValueError("singularity_penalty expects exactly one end-effector body in robot_cfg.body_names.")
+
+    body_id = robot_cfg.body_ids[0]
+    jacobians = robot.root_physx_view.get_jacobians()
+    jacobian_body_id = body_id - 1 if robot.is_fixed_base else body_id
+
+    # Use translational + rotational Jacobian rows for the selected arm joints.
+    jacobian = jacobians[:, jacobian_body_id, :6, robot_cfg.joint_ids]
+
+    singular_values = torch.linalg.svdvals(jacobian)
+    min_singular_value = singular_values[:, -1]
+    return (
+        (min_singular_value_threshold - min_singular_value).clamp(min=0.0)
+        / max(min_singular_value_threshold, 1e-6)
+    )
+
+
 def ee_close(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
