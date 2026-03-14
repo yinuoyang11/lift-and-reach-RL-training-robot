@@ -5,4 +5,9 @@
 
 from .on_policy_runner import OnPolicyRunner
 
-__all__ = ["OnPolicyRunner"]
+try:
+    from .distillation_runner import DistillationRunner
+except ImportError:  # pragma: no cover - optional in lightweight overlays
+    DistillationRunner = None
+
+__all__ = ["OnPolicyRunner", "DistillationRunner"]

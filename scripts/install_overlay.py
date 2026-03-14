@@ -30,6 +30,7 @@ TASK_RELATIVE_FILES = [
     "config/franka/agents/robomimic/bcq.json",
 ]
 RSL_RELATIVE_FILES = [
+    "runners/__init__.py",
     "modules/__init__.py",
     "modules/actor_critic_vision.py",
     "runners/on_policy_runner.py",

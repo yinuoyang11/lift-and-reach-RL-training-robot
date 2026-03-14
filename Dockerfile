@@ -60,7 +60,6 @@ ARG ISAACLAB_REF=main
 RUN git clone --depth 1 --branch ${ISAACLAB_REF} https://github.com/isaac-sim/IsaacLab.git ${ISAACLAB_PATH}
 
 WORKDIR ${ISAACLAB_PATH}
-RUN ${ISAACSIM_PATH}/python.sh -m pip install --upgrade pip setuptools wheel
 RUN ${ISAACSIM_PATH}/python.sh -m pip install \
     -e source/isaaclab \
     -e source/isaaclab_assets \
@@ -70,15 +69,16 @@ RUN ${ISAACSIM_PATH}/python.sh -m pip install \
 RUN ${ISAACSIM_PATH}/python.sh -m pip install \
     rsl-rl-lib==3.0.1 \
     tensordict \
-    torchvision \
-    packaging \
     gymnasium
+RUN ${ISAACSIM_PATH}/python.sh -m pip install --no-deps torchvision
 
 WORKDIR /workspace
 COPY . ${OVERLAY_PATH}
 
 WORKDIR ${OVERLAY_PATH}
-RUN ${ISAACSIM_PATH}/python.sh scripts/install_overlay.py
+RUN ${ISAACSIM_PATH}/python.sh scripts/install_overlay.py \
+    --task-root /workspace/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/manager_based/manipulation/lift \
+    --rsl-root /isaac-sim/exts/omni.isaac.ml_archive/pip_prebundle/rsl_rl
 
 # Convenience launch script.
 RUN printf '%s\n' \
@@ -88,13 +88,6 @@ RUN printf '%s\n' \
     '${ISAACSIM_PATH}/python.sh scripts/reinforcement_learning/rsl_rl/train.py --task Isaac-Lift-Cube-DualArm-IK-Rel-v0 --enable_cameras --headless --device cuda:0 --rendering_mode performance "$@"' \
     > /usr/local/bin/train_lift.sh && chmod +x /usr/local/bin/train_lift.sh
 
-ARG USER_ID=1000
-ARG GROUP_ID=1000
-RUN groupadd --gid ${GROUP_ID} appuser || true && \
-    useradd --uid ${USER_ID} --gid ${GROUP_ID} --create-home --shell /bin/bash appuser || true && \
-    chown -R ${USER_ID}:${GROUP_ID} /workspace
-
-USER appuser
 WORKDIR /workspace/IsaacLab
 
 CMD ["/bin/bash"]
